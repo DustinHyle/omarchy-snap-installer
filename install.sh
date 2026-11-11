@@ -89,7 +89,7 @@ fi
 
 # Authenticate explicitly: hyprpm captures its subprocess output, which can
 # otherwise hide a sudo prompt. Each operation can drop its sudo timestamp.
-sudo -v
+sudo_ready
 hyprpm --no-nix update
 
 # Re-register the plugin if it was added earlier without this pin.
@@ -98,17 +98,17 @@ if rev=$(registered_rev); then
     echo
     echo "hypr-edgesnap is registered at ${rev:-the latest upstream commit}, not the reviewed commit."
     echo "It will be removed and added again at ${PIN:0:12}; hyprpm asks you to confirm."
-    sudo -v
+    sudo_ready
     hyprpm --no-nix remove hypr-edgesnap
     ! registered_rev >/dev/null || fail "hypr-edgesnap is still registered; it was not re-pinned."
   fi
 fi
 if ! registered_rev >/dev/null; then
-  sudo -v
+  sudo_ready
   hyprpm --no-nix add "$URL" "$PIN"
 fi
 [[ $(registered_rev) == "$PIN" ]] || fail "hyprpm did not register hypr-edgesnap at $PIN."
-sudo -v
+sudo_ready
 hyprpm --no-nix enable hypr-edgesnap
 
 CHANGED=true

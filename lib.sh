@@ -14,6 +14,12 @@ PAYLOAD=(edgesnap.lua window-snap.lua omarchy-window-snap hypr-edgesnap-check 50
 
 fail() { echo "Error: $*" >&2; exit 1; }
 
+# Make sure the next sudo call will not prompt. hyprpm captures its own
+# output, which can hide a sudo prompt, so authenticate visibly first. `sudo -v`
+# alone is not enough: it asks for a password even when sudoers grants
+# NOPASSWD, as long as any other rule for the user requires one.
+sudo_ready() { sudo -n true 2>/dev/null || sudo -v; }
+
 target_for() {
   case $1 in
     *.lua) echo "$HOME/.config/hypr/$1" ;;

@@ -46,16 +46,19 @@ for file in "${PAYLOAD[@]}"; do
 done
 
 if command -v hyprpm >/dev/null && registered_rev >/dev/null; then
-  sudo -v
+  sudo_ready
   hyprpm --no-nix disable hypr-edgesnap || true
-  sudo -v
+  sudo_ready
   hyprpm --no-nix remove hypr-edgesnap || echo "hyprpm did not remove hypr-edgesnap; run 'hyprpm remove hypr-edgesnap' later." >&2
 fi
 
 if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
   hyprctl reload >/dev/null || true
-  errors=$(hyprctl configerrors)
+  errors=$(hyprctl configerrors 2>/dev/null) || errors=""
   [[ -z ${errors//[[:space:]]/} ]] || echo "Hyprland reports config errors: $errors" >&2
+  if hyprctl -j plugin list 2>/dev/null | jq -e 'any(.[]; .name == "hypr-edgesnap")' >/dev/null; then
+    echo "hypr-edgesnap is still loaded in this session; it unloads when you log out."
+  fi
 fi
-echo "Uninstalled. A plugin already loaded stays active until you log out."
+echo "Uninstalled."
 echo "Earlier installer backups remain in ~/.local/state/omarchy-snap-backup.*"

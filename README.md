@@ -20,9 +20,9 @@ logout is normally needed.
 - **Omarchy 4.5.0 or newer** (the Lua desktop config with the `o.rebind`
   helper). The installer stops on older versions; run `omarchy update` first.
 - Running Hyprland desktop, internet access, and sudo permission.
-- Upstream plugin compatibility with your installed Hyprland. Tested on
-  0.56.2; upstream also documents 0.57.2 support. Builds can fail on newer,
-  unsupported versions.
+- Upstream plugin compatibility with your installed Hyprland. Tested on Omarchy
+  4.5.0 with Hyprland 0.56.2; upstream also documents 0.57.2 support. Builds can
+  fail on newer, unsupported versions.
 
 ## The third-party plugin
 
@@ -119,6 +119,6 @@ bash uninstall.sh
 ```
 
 This removes the load line, the installed files (only ones the installer
-wrote), and the hyprpm registration, then reloads Hyprland. A plugin that is
-already loaded stays active until you log out. Your `edgesnap-local.lua` and
-the installer's backups are kept.
+wrote), and the hyprpm registration, then reloads Hyprland, which restores
+Omarchy's default Super+Alt+arrow bindings. Your `edgesnap-local.lua` and the
+installer's backups are kept.
