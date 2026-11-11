@@ -1,0 +1,185 @@
+#!/usr/bin/env bash
+# omarchy-window-snap: place the focused window in a half, a quarter, or the
+# whole work area, Windows Aero Snap style.
+#
+# Usage: omarchy-window-snap <left|right|top|bottom|top-left|top-right|bottom-left|bottom-right|maximize|center> [--dry-run]
+#
+# Halves turn into quarters the way Windows does it: snap left, then press up
+# and the window takes the top-left quarter. A tiled window is floated first.
+
+set -euo pipefail
+
+position=""
+dry_run=false
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) dry_run=true ;;
+    *) position="$arg" ;;
+  esac
+done
+
+if [[ -z "$position" ]]; then
+  echo "Usage: omarchy-window-snap <left|right|top|bottom|top-left|top-right|bottom-left|bottom-right|maximize|center> [--dry-run]" >&2
+  exit 2
+fi
+
+win="$(hyprctl activewindow -j 2>/dev/null || echo '{}')"
+addr="$(jq -r '.address // empty' <<<"$win")"
+[[ -n "$addr" ]] || exit 0
+
+monid="$(jq -r '.monitor' <<<"$win")"
+mon="$(hyprctl monitors -j | jq --argjson id "$monid" '[.[] | select(.id == $id)][0]')"
+[[ "$mon" != "null" ]] || exit 0
+
+read -r mx my mw mh transform < <(jq -r '[.x, .y, ((.width / .scale) | floor), ((.height / .scale) | floor), .transform] | @tsv' <<<"$mon")
+read -r rl rt rr rb < <(jq -r '.reserved | @tsv' <<<"$mon")
+
+if ((transform % 2 == 1)); then
+  tmp=$mw
+  mw=$mh
+  mh=$tmp
+fi
+
+read -r go_top go_right go_bottom go_left < <(
+  hyprctl -j getoption general:gaps_out | jq -r '.css | split(" ") | join(" ")'
+)
+read -r gi_top gi_right gi_bottom gi_left < <(
+  hyprctl -j getoption general:gaps_in | jq -r '.css | split(" ") | join(" ")'
+)
+
+# Divide the OUTER work area first, just like hypr-edgesnap. Every zone must
+# contain its own titlebar and borders; subtracting a titlebar before dividing
+# makes the client too tall and places the bottom row too high.
+border=$(hyprctl -j getoption general:border_size | jq -r '.int // 0')
+[[ "$border" =~ ^[0-9]+$ ]] || border=0
+bar=0
+decorations=$(hyprctl -j decorations "address:$addr" 2>/dev/null || echo '[]')
+if jq -e 'any(.[]; .decorationName == "Hyprbar")' >/dev/null 2>&1 <<<"$decorations"; then
+  bar=$(hyprctl -j getoption plugin:hyprbars:bar_height 2>/dev/null | jq -r '.int // 0' 2>/dev/null || echo 0)
+  [[ "$bar" =~ ^[0-9]+$ ]] || bar=0
+fi
+
+left=$((mx + rl + go_left))
+top=$((my + rt + go_top))
+right=$((mx + mw - rr - go_right))
+bottom=$((my + mh - rb - go_bottom))
+avail_w=$((right - left))
+avail_h=$((bottom - top))
+
+((avail_w > 0 && avail_h > 0)) || exit 0
+
+# gaps_in is per side, so the space between two zones is the sum of both
+# facing sides. Round half pixels up, matching the plugin's CBox rounding.
+gap_x=$((gi_left + gi_right))
+gap_y=$((gi_top + gi_bottom))
+half_w=$(((avail_w - gap_x + 1) / 2))
+half_h=$(((avail_h - gap_y + 1) / 2))
+right_x=$((left + (avail_w + gap_x + 1) / 2))
+bottom_y=$((top + (avail_h + gap_y + 1) / 2))
+
+# Rectangles: x y w h
+L_X=$left L_Y=$top L_W=$half_w L_H=$avail_h
+R_X=$right_x R_Y=$top R_W=$half_w R_H=$avail_h
+T_X=$left T_Y=$top T_W=$avail_w T_H=$half_h
+B_X=$left B_Y=$bottom_y B_W=$avail_w B_H=$half_h
+TL_X=$left TL_Y=$top TL_W=$half_w TL_H=$half_h
+TR_X=$right_x TR_Y=$top TR_W=$half_w TR_H=$half_h
+BL_X=$left BL_Y=$bottom_y BL_W=$half_w BL_H=$half_h
+BR_X=$right_x BR_Y=$bottom_y BR_W=$half_w BR_H=$half_h
+
+# Convert each outer zone into client geometry only after splitting it.
+for zone in L R T B TL TR BL BR; do
+  x=${zone}_X y=${zone}_Y w=${zone}_W h=${zone}_H
+  printf -v "$x" '%d' "$((${!x} + border))"
+  printf -v "$y" '%d' "$((${!y} + border + bar))"
+  printf -v "$w" '%d' "$((${!w} - border * 2))"
+  printf -v "$h" '%d' "$((${!h} - border * 2 - bar))"
+done
+
+read -r cx cy cw ch < <(jq -r '[.at[0], .at[1], .size[0], .size[1]] | map(floor) | @tsv' <<<"$win")
+
+TOL=8
+near() {
+  local x=$1 y=$2 w=$3 h=$4
+  ((cx >= x - TOL && cx <= x + TOL &&
+    cy >= y - TOL && cy <= y + TOL &&
+    cw >= w - TOL && cw <= w + TOL &&
+    ch >= h - TOL && ch <= h + TOL))
+}
+
+case "$position" in
+  left)
+    TX=$L_X TY=$L_Y TW=$L_W TH=$L_H
+    if near "$T_X" "$T_Y" "$T_W" "$T_H"; then
+      TX=$TL_X TY=$TL_Y TW=$TL_W TH=$TL_H
+    elif near "$B_X" "$B_Y" "$B_W" "$B_H"; then
+      TX=$BL_X TY=$BL_Y TW=$BL_W TH=$BL_H
+    fi
+    ;;
+  right)
+    TX=$R_X TY=$R_Y TW=$R_W TH=$R_H
+    if near "$T_X" "$T_Y" "$T_W" "$T_H"; then
+      TX=$TR_X TY=$TR_Y TW=$TR_W TH=$TR_H
+    elif near "$B_X" "$B_Y" "$B_W" "$B_H"; then
+      TX=$BR_X TY=$BR_Y TW=$BR_W TH=$BR_H
+    fi
+    ;;
+  top | up)
+    if near "$L_X" "$L_Y" "$L_W" "$L_H"; then
+      TX=$TL_X TY=$TL_Y TW=$TL_W TH=$TL_H
+    elif near "$R_X" "$R_Y" "$R_W" "$R_H"; then
+      TX=$TR_X TY=$TR_Y TW=$TR_W TH=$TR_H
+    else
+      TX=$T_X TY=$T_Y TW=$T_W TH=$T_H
+    fi
+    ;;
+  bottom | down)
+    if near "$L_X" "$L_Y" "$L_W" "$L_H"; then
+      TX=$BL_X TY=$BL_Y TW=$BL_W TH=$BL_H
+    elif near "$R_X" "$R_Y" "$R_W" "$R_H"; then
+      TX=$BR_X TY=$BR_Y TW=$BR_W TH=$BR_H
+    else
+      TX=$B_X TY=$B_Y TW=$B_W TH=$B_H
+    fi
+    ;;
+  top-left) TX=$TL_X TY=$TL_Y TW=$TL_W TH=$TL_H ;;
+  top-right) TX=$TR_X TY=$TR_Y TW=$TR_W TH=$TR_H ;;
+  bottom-left) TX=$BL_X TY=$BL_Y TW=$BL_W TH=$BL_H ;;
+  bottom-right) TX=$BR_X TY=$BR_Y TW=$BR_W TH=$BR_H ;;
+  maximize)
+    TX=$((left + border)) TY=$((top + border + bar))
+    TW=$((avail_w - border * 2)) TH=$((avail_h - border * 2 - bar))
+    ;;
+  center)
+    TW=$cw TH=$ch
+    TX=$((left + (avail_w - TW) / 2)) TY=$((top + (avail_h - TH) / 2))
+    ;;
+  *)
+    echo "omarchy-window-snap: unknown position '$position'" >&2
+    exit 2
+    ;;
+esac
+
+if $dry_run; then
+  echo "resize ${TW}x${TH} at ${TX},${TY} (work area ${left},${top} ${avail_w}x${avail_h})"
+  exit 0
+fi
+
+window="address:$addr"
+
+hypr_dispatch() {
+  local lua="$1"
+  shift
+  hyprctl dispatch "$lua" >/dev/null 2>&1 || hyprctl dispatch "$@" >/dev/null 2>&1 || true
+}
+
+if [[ "$(jq -r '.floating' <<<"$win")" != "true" ]]; then
+  hypr_dispatch "hl.dsp.window.float({ window = \"$window\", action = \"set\" })" setfloating "$window"
+fi
+
+if [[ "$(jq -r '.fullscreen' <<<"$win")" != "0" ]]; then
+  hypr_dispatch "hl.dsp.window.fullscreen({ window = \"$window\", mode = \"maximized\", action = \"unset\" })" fullscreenstate 0 0 "$window"
+fi
+
+hypr_dispatch "hl.dsp.window.resize({ window = \"$window\", x = $TW, y = $TH })" resizeactive exact "$TW" "$TH,address:$addr"
+hypr_dispatch "hl.dsp.window.move({ window = \"$window\", x = $TX, y = $TY })" moveactive exact "$TX" "$TY,address:$addr"

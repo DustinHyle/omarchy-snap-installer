@@ -1,0 +1,17 @@
+#!/bin/bash
+# Rebuild hyprpm-managed plugins (hypr-edgesnap) for the Hyprland version that
+# was just installed. omarchy update runs post-update hooks inside its sudo
+# authorization, so hyprpm's internal sudo calls do not prompt again.
+#
+# The second step puts back plugins loaded from the Lua config (hyprbars,
+# hypr-edgesnap): hyprpm's load-state pass unloads plugins it does not manage.
+set -uo pipefail
+
+command -v hyprpm >/dev/null 2>&1 || exit 0
+
+if ! hyprpm --no-nix update; then
+  echo "hyprpm update failed; hypr-edgesnap needs a manual rebuild." >&2
+fi
+
+# Reload even after a failed update: it restores any plugin hyprpm unloaded.
+hyprctl reload >/dev/null 2>&1 || true
