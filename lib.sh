@@ -14,11 +14,92 @@ PAYLOAD=(edgesnap.lua window-snap.lua omarchy-window-snap hypr-edgesnap-check 50
 
 fail() { echo "Error: $*" >&2; exit 1; }
 
-# Make sure the next sudo call will not prompt. hyprpm captures its own
-# output, which can hide a sudo prompt, so authenticate visibly first. `sudo -v`
-# alone is not enough: it asks for a password even when sudoers grants
-# NOPASSWD, as long as any other rule for the user requires one.
-sudo_ready() { sudo -n true 2>/dev/null || sudo -v; }
+# hyprpm calls `sudo -k` after each operation. Scope a shim to installer child
+# commands only: defer that invalidation until cleanup, and forward every real
+# privileged command to the real sudo in noninteractive mode. No password is
+# read/stored by us, no sudoers changes, and builds still run as the user.
+start_sudo_session() {
+  SUDO_REAL=$(command -v sudo)
+  SUDO_SESSION_DIR=$(mktemp -d)
+  chmod 700 "$SUDO_SESSION_DIR"
+  {
+    echo '#!/usr/bin/env bash'
+    echo 'if [[ $# == 1 && $1 == -k ]]; then exit 0; fi'
+    printf 'exec %q -n "$@"\n' "$SUDO_REAL"
+  } > "$SUDO_SESSION_DIR/sudo"
+  chmod 755 "$SUDO_SESSION_DIR/sudo"
+  "$SUDO_REAL" -n true 2>/dev/null || "$SUDO_REAL" -v || return
+  "$SUDO_REAL" -n true || {
+    echo 'sudo did not cache authorization; check its timestamp policy before retrying.' >&2
+    return 1
+  }
+  (
+    while sleep 30; do
+      "$SUDO_REAL" -n -v >/dev/null 2>&1 || exit
+    done
+  ) </dev/null >/dev/null 2>&1 &
+  SUDO_KEEPALIVE=$!
+}
+
+session_run() { PATH="$SUDO_SESSION_DIR:$PATH" "$@"; }
+hyprpm_run() { session_run hyprpm "$@"; }
+
+stop_sudo_session() {
+  if [[ -n ${SUDO_KEEPALIVE:-} ]]; then
+    kill "$SUDO_KEEPALIVE" 2>/dev/null || true
+    wait "$SUDO_KEEPALIVE" 2>/dev/null || true
+  fi
+  if [[ -n ${SUDO_SESSION_DIR:-} ]]; then
+    rm -f -- "$SUDO_SESSION_DIR/sudo"
+    rmdir -- "$SUDO_SESSION_DIR" || true
+    "$SUDO_REAL" -k || true
+  fi
+}
+
+plugin_cache() {
+  python3 -I - <<'PY'
+import os, pathlib, pwd
+print(os.environ.get('HYPR_EDGESNAP_HYPRPM_CACHE') or pathlib.Path('/var/cache/hyprpm') / pwd.getpwuid(os.getuid()).pw_name)
+PY
+}
+
+# Capture after the initial update, before replacing the registration. These
+# are the actual built files, so recovery does not need GitHub or a rebuild.
+snapshot_plugin() {
+  PLUGIN_CACHE=$(plugin_cache)
+  PLUGIN_SNAPSHOT="$BACKUP/plugin-before-replacement"
+  mkdir -m 700 "$PLUGIN_SNAPSHOT"
+  PLUGIN_EXISTED=false
+  PLUGIN_WAS_LOADED=false
+  if registered_rev >/dev/null; then
+    local repo="$PLUGIN_CACHE/hypr-edgesnap"
+    [[ -f $repo/state.toml && ! -L $repo/state.toml && -f $repo/hypr-edgesnap.so && ! -L $repo/hypr-edgesnap.so ]] ||
+      fail 'Cannot safely snapshot the existing hypr-edgesnap cache; no replacement attempted.'
+    cp -- "$repo/state.toml" "$repo/hypr-edgesnap.so" "$PLUGIN_SNAPSHOT/"
+    PLUGIN_EXISTED=true
+    if hyprctl -j plugin list | jq -e 'any(.[]; .name == "hypr-edgesnap")' >/dev/null; then
+      PLUGIN_WAS_LOADED=true
+    fi
+  fi
+}
+
+restore_plugin() {
+  echo 'Restoring the previous hypr-edgesnap registration and built plugin.' >&2
+  local repo="$PLUGIN_CACHE/hypr-edgesnap"
+  hyprctl plugin unload "$repo/hypr-edgesnap.so" >/dev/null 2>&1 || true
+  if $PLUGIN_EXISTED; then
+    session_run sudo install -d -m 755 -- "$repo" || return
+    session_run sudo install -m 644 -o 0 -g 0 -- "$PLUGIN_SNAPSHOT/state.toml" "$repo/state.toml" || return
+    session_run sudo install -m 755 -o 0 -g 0 -- "$PLUGIN_SNAPSHOT/hypr-edgesnap.so" "$repo/hypr-edgesnap.so" || return
+    if $PLUGIN_WAS_LOADED; then
+      hyprctl plugin load "$repo/hypr-edgesnap.so" || return
+    fi
+  elif registered_rev >/dev/null; then
+    # Recovery of a fresh install restores the previous absence of this repo.
+    printf 'y\n' | hyprpm_run --no-nix remove hypr-edgesnap || return
+    ! registered_rev >/dev/null || return 1
+  fi
+}
 
 target_for() {
   case $1 in

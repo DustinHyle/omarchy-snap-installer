@@ -17,6 +17,18 @@ INFO
 read -r -p "Uninstall snapping? [y/N] " answer
 [[ $answer == y || $answer == Y || $answer == yes ]] || exit 0
 
+on_exit() {
+  local status=$?
+  trap - EXIT INT TERM
+  hyprctl reload >/dev/null 2>&1 || true
+  stop_sudo_session
+  exit "$status"
+}
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+start_sudo_session
+
 if [[ -f $CONFIG ]] && grep -Fqx -- "$LOAD" "$CONFIG"; then
   mkdir -p "$HOME/.local/state"
   saved=$(mktemp "$HOME/.local/state/omarchy-snap-uninstall.hyprland.lua.XXXXXXXX")
@@ -46,10 +58,8 @@ for file in "${PAYLOAD[@]}"; do
 done
 
 if command -v hyprpm >/dev/null && registered_rev >/dev/null; then
-  sudo_ready
-  hyprpm --no-nix disable hypr-edgesnap || true
-  sudo_ready
-  hyprpm --no-nix remove hypr-edgesnap || echo "hyprpm did not remove hypr-edgesnap; run 'hyprpm remove hypr-edgesnap' later." >&2
+  hyprpm_run --no-nix disable hypr-edgesnap || true
+  hyprpm_run --no-nix remove hypr-edgesnap || echo "hyprpm did not remove hypr-edgesnap; run 'hyprpm remove hypr-edgesnap' later." >&2
 fi
 
 if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then

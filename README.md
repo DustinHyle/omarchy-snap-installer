@@ -10,8 +10,9 @@ bash install.sh --check
 bash install.sh
 ```
 
-Do **not** run the installer with sudo. It asks for sudo when needed; hyprpm
-also asks you to confirm adding the plugin repository. Keep the whole
+Do **not** run the installer with sudo. It asks for your password **once**
+(or not at all if already authorized/passwordless); hyprpm still asks you to
+confirm repository operations. Keep the whole
 directory together, and keep it if you want to run `uninstall.sh` later. No
 logout is normally needed.
 
@@ -35,6 +36,29 @@ from the post-update hook, so new upstream code is never pulled in on its own.
 To move to a newer upstream release, review its changes, update `PIN`, and
 rerun `install.sh`. If hypr-edgesnap was already added to hyprpm without this
 pin, the installer removes and re-adds it (hyprpm asks you to confirm).
+
+Before replacement, it saves the previous registration, enabled state, and
+built plugin. If replacement is cancelled, a build fails, or config validation
+fails, it restores that snapshot **without needing the network or a rebuild**.
+The snapshot is taken after the initial `hyprpm update`; that update and other
+hyprpm repositories are not rolled back. A failed fresh install removes its
+new registration. Recovery failures (for example revoked sudo authorization)
+are reported with the saved plugin files' location.
+
+### One-password authorization
+
+hyprpm normally invalidates sudo's authorization after each command. During
+install/uninstall only, a private temporary PATH shim defers **only** its bare
+`sudo -k` calls. Other sudo calls are forwarded to the real sudo with `-n`
+(never a hidden password prompt); a keepalive refreshes the timestamp during
+long builds. Cleanup stops the keepalive, removes the shim, and invalidates
+authorization, including on errors, Ctrl+C, and termination.
+
+Passwords are handled solely by sudo: never captured, stored, or passed through
+the installer. No sudoers or system-wide policy changes are made, and plugin
+compilation remains unprivileged. If your sudo policy disables timestamp
+caching, installation stops with an explanation instead of repeatedly prompting.
+If another process invalidates authorization during installation, rerun it.
 
 ## Controls
 
@@ -109,6 +133,17 @@ directory, and `new-files.txt` there lists paths that did not exist before.
 If installation fails after it starts changing files, it puts all of them back
 automatically. Rerunning does not add duplicate load lines.
 
+### Migrating the original manual installation
+
+The installer recognizes the exact script-backed and plugin-backed snapping
+blocks from the original manual setup in `bindings.lua`. It removes only those
+blocks, their old standalone `require("hypr.edgesnap")` line, and the matching
+edge-alignment block from `looknfeel.lua`. The installer-managed module then
+owns the snapping shortcuts/settings. Dictation bindings, gaps, and unrelated
+configuration are preserved. A modified legacy block causes installation to
+stop for manual review rather than guessing what to delete. All affected files
+are backed up, and config failure restores them.
+
 After a Hyprland upgrade, a new session or reboot may be needed before the
 rebuilt plugin loads. You get a notification at login if it did not load.
 
@@ -122,3 +157,14 @@ This removes the load line, the installed files (only ones the installer
 wrote), and the hyprpm registration, then reloads Hyprland, which restores
 Omarchy's default Super+Alt+arrow bindings. Your `edgesnap-local.lua` and the
 installer's backups are kept.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Tests use temporary homes and fake sudo/hyprpm/Hyprland commands: they never
+install packages, request real privilege, or modify the running desktop. They
+cover migration, reinstalling, single-password authorization, cancelled plugin
+operations, build/config failures, and restoration of the original plugin.

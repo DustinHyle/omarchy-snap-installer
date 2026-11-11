@@ -18,12 +18,15 @@ case "$MODE" in
 esac
 
 check_prerequisites
+[[ -f "$ROOT/migrate-legacy.py" ]] || fail 'Missing migrate-legacy.py; keep the repository together.'
 for file in "${PAYLOAD[@]}"; do
   [[ -f "$ROOT/payload/$file" ]] || fail "Missing payload/$file; keep the whole repository together."
 done
 
 echo "Prerequisites OK. Omarchy $(omarchy-version), Hyprland $(hyprctl -j version | jq -r '.version // .tag // .commit')."
 [[ $MODE != --check ]] || exit 0
+
+python3 -I "$ROOT/migrate-legacy.py" --check
 
 cat <<INFO
 
@@ -37,6 +40,11 @@ replacing any existing actions on those keys, and turns on Hyprland's built-in
 floating-window edge alignment (general:snap). Other bindings, monitor
 settings, and your gap sizes are left alone. Replaced files are backed up, and
 a failed install puts your previous files back.
+Recognized legacy snap configuration is migrated with backups; other personal
+configuration is left alone. Sudo authorization is requested once, kept alive
+only during installation, and invalidated on exit. Repository confirmations
+are still shown. If sudo policy forbids caching, installation stops instead
+of repeatedly asking for your password.
 INFO
 read -r -p "Install snapping? [y/N] " answer
 [[ $answer == y || $answer == Y || $answer == yes ]] || exit 0
@@ -45,6 +53,7 @@ read -r -p "Install snapping? [y/N] " answer
 mkdir -p "$HOME/.local/state"
 BACKUP=$(mktemp -d "$HOME/.local/state/omarchy-snap-backup.XXXXXXXX")
 TARGETS=("$CONFIG")
+TARGETS+=("$HOME/.config/hypr/bindings.lua" "$HOME/.config/hypr/looknfeel.lua")
 for file in "${PAYLOAD[@]}"; do TARGETS+=("$(target_for "$file")"); done
 for target in "${TARGETS[@]}"; do
   relative=${target#"$HOME/"}
@@ -70,27 +79,42 @@ rollback() {
       rm -f -- "$target"
     fi
   done
-  echo "hyprpm may still list hypr-edgesnap; run uninstall.sh to remove it too." >&2
 }
 
 CHANGED=false
+PLUGIN_CHANGED=false
 INSTALLED=false
 # hyprpm may reconcile other plugins during update/enable, so always reload
 # the user's config on exit, even when installation fails partway through.
 on_exit() {
+  local status=$?
+  trap - EXIT INT TERM
+  set +e
   if $CHANGED && ! $INSTALLED; then rollback; fi
+  if $PLUGIN_CHANGED && ! $INSTALLED; then
+    restore_plugin || {
+      echo "Plugin recovery failed. Saved plugin files: $PLUGIN_SNAPSHOT" >&2
+      echo 'Check sudo authorization and restore the saved files before restarting Hyprland.' >&2
+      status=1
+    }
+  fi
   hyprctl reload >/dev/null 2>&1 || true
+  stop_sudo_session
+  exit "$status"
 }
 trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+start_sudo_session
 
 if ! command -v hyprpm >/dev/null; then
-  omarchy pkg add hyprpm
+  session_run omarchy pkg add hyprpm
 fi
 
-# Authenticate explicitly: hyprpm captures its subprocess output, which can
-# otherwise hide a sudo prompt. Each operation can drop its sudo timestamp.
-sudo_ready
-hyprpm --no-nix update
+# Refresh headers/builds, then capture the existing repo before replacement.
+hyprpm_run --no-nix update
+snapshot_plugin
 
 # Re-register the plugin if it was added earlier without this pin.
 if rev=$(registered_rev); then
@@ -98,20 +122,21 @@ if rev=$(registered_rev); then
     echo
     echo "hypr-edgesnap is registered at ${rev:-the latest upstream commit}, not the reviewed commit."
     echo "It will be removed and added again at ${PIN:0:12}; hyprpm asks you to confirm."
-    sudo_ready
-    hyprpm --no-nix remove hypr-edgesnap
+    PLUGIN_CHANGED=true
+    hyprpm_run --no-nix remove hypr-edgesnap
     ! registered_rev >/dev/null || fail "hypr-edgesnap is still registered; it was not re-pinned."
   fi
 fi
 if ! registered_rev >/dev/null; then
-  sudo_ready
-  hyprpm --no-nix add "$URL" "$PIN"
+  PLUGIN_CHANGED=true
+  hyprpm_run --no-nix add "$URL" "$PIN"
 fi
 [[ $(registered_rev) == "$PIN" ]] || fail "hyprpm did not register hypr-edgesnap at $PIN."
-sudo_ready
-hyprpm --no-nix enable hypr-edgesnap
+PLUGIN_CHANGED=true
+hyprpm_run --no-nix enable hypr-edgesnap
 
 CHANGED=true
+python3 -I "$ROOT/migrate-legacy.py" --apply
 for file in "${PAYLOAD[@]}"; do
   target=$(target_for "$file")
   mkdir -p "$(dirname -- "$target")"
