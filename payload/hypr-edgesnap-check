@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Installed by omarchy-snap-installer (copied from LordMelkor/hypr-edgesnap).
 """Observe hyprpm state and actual loaded presence; never build/load/reload.
 
 --wait SECONDS  when the plugin is enabled and built for the running Hyprland

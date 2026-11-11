@@ -1,13 +1,29 @@
 #!/bin/bash
-# Rebuild hyprpm-managed plugins (hypr-edgesnap) for the Hyprland version that
-# was just installed. omarchy update runs post-update hooks inside its sudo
-# authorization, so hyprpm's internal sudo calls do not prompt again.
+# Installed by omarchy-snap-installer.
 #
-# The second step puts back plugins loaded from the Lua config (hyprbars,
+# Rebuild hyprpm-managed plugins (hypr-edgesnap) for the Hyprland version that
+# was just installed. hypr-edgesnap is pinned to a reviewed commit, so this
+# only recompiles that code; it does not pull new upstream changes. Other
+# hyprpm plugins follow their own pins (or latest, if unpinned).
+#
+# The reload afterwards puts back plugins loaded from the Lua config (hyprbars,
 # hypr-edgesnap): hyprpm's load-state pass unloads plugins it does not manage.
 set -uo pipefail
 
 command -v hyprpm >/dev/null 2>&1 || exit 0
+
+skip() {
+  echo "Skipped rebuilding hyprpm plugins ($1). Run 'hyprpm update' in a terminal, then 'hyprctl reload'." >&2
+  exit 0
+}
+
+# hyprpm hides its own sudo prompts, which would make the update look frozen.
+# Make sure sudo is already authorized, asking visibly only when someone is
+# there to answer.
+if ! sudo -n true 2>/dev/null; then
+  [[ -z ${OMARCHY_UPDATE_UNATTENDED:-} && -t 0 ]] || skip "sudo would need a password"
+  sudo -v || skip "sudo was not authorized"
+fi
 
 if ! hyprpm --no-nix update; then
   echo "hyprpm update failed; hypr-edgesnap needs a manual rebuild." >&2
