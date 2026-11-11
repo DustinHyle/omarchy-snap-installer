@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Installed by omarchy-snap-installer.
 # omarchy-window-snap: place the focused window in a half, a quarter, or the
 # whole work area, Windows Aero Snap style.
 #
@@ -167,19 +168,19 @@ fi
 
 window="address:$addr"
 
+# Lua dispatchers for Omarchy's Lua config. Failures are reported on stderr.
 hypr_dispatch() {
-  local lua="$1"
-  shift
-  hyprctl dispatch "$lua" >/dev/null 2>&1 || hyprctl dispatch "$@" >/dev/null 2>&1 || true
+  hyprctl dispatch "$1" >/dev/null || echo "omarchy-window-snap: dispatch failed: $1" >&2
 }
 
 if [[ "$(jq -r '.floating' <<<"$win")" != "true" ]]; then
-  hypr_dispatch "hl.dsp.window.float({ window = \"$window\", action = \"set\" })" setfloating "$window"
+  hypr_dispatch "hl.dsp.window.float({ window = \"$window\", action = \"set\" })"
 fi
 
+# Leave both maximized and true fullscreen before placing the window.
 if [[ "$(jq -r '.fullscreen' <<<"$win")" != "0" ]]; then
-  hypr_dispatch "hl.dsp.window.fullscreen({ window = \"$window\", mode = \"maximized\", action = \"unset\" })" fullscreenstate 0 0 "$window"
+  hypr_dispatch "hl.dsp.window.fullscreen_state({ window = \"$window\", internal = 0, client = 0, action = \"set\" })"
 fi
 
-hypr_dispatch "hl.dsp.window.resize({ window = \"$window\", x = $TW, y = $TH })" resizeactive exact "$TW" "$TH,address:$addr"
-hypr_dispatch "hl.dsp.window.move({ window = \"$window\", x = $TX, y = $TY })" moveactive exact "$TX" "$TY,address:$addr"
+hypr_dispatch "hl.dsp.window.resize({ window = \"$window\", x = $TW, y = $TH })"
+hypr_dispatch "hl.dsp.window.move({ window = \"$window\", x = $TX, y = $TY })"
