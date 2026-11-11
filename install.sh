@@ -24,9 +24,8 @@ for file in "${PAYLOAD[@]}"; do
 done
 
 echo "Prerequisites OK. Omarchy $(omarchy-version), Hyprland $(hyprctl -j version | jq -r '.version // .tag // .commit')."
-[[ $MODE != --check ]] || exit 0
-
 python3 -I "$ROOT/migrate-legacy.py" --check
+[[ $MODE != --check ]] || exit 0
 
 cat <<INFO
 

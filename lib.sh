@@ -33,8 +33,11 @@ start_sudo_session() {
     echo 'sudo did not cache authorization; check its timestamp policy before retrying.' >&2
     return 1
   }
+  # Stop refreshing once the installer is gone, even if it was killed
+  # without running its cleanup.
+  local parent=$$
   (
-    while sleep 30; do
+    while sleep 30 && kill -0 "$parent" 2>/dev/null; do
       "$SUDO_REAL" -n -v >/dev/null 2>&1 || exit
     done
   ) </dev/null >/dev/null 2>&1 &

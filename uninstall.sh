@@ -27,7 +27,6 @@ on_exit() {
 trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-start_sudo_session
 
 if [[ -f $CONFIG ]] && grep -Fqx -- "$LOAD" "$CONFIG"; then
   mkdir -p "$HOME/.local/state"
@@ -58,6 +57,8 @@ for file in "${PAYLOAD[@]}"; do
 done
 
 if command -v hyprpm >/dev/null && registered_rev >/dev/null; then
+  # Only the hyprpm step needs sudo; config cleanup above works without it.
+  start_sudo_session
   hyprpm_run --no-nix disable hypr-edgesnap || true
   hyprpm_run --no-nix remove hypr-edgesnap || echo "hyprpm did not remove hypr-edgesnap; run 'hyprpm remove hypr-edgesnap' later." >&2
 fi
